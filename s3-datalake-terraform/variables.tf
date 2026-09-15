@@ -34,7 +34,7 @@ variable "layer_bucket_name_prefixes" {
 variable "force_destroy" {
   description = "If true, allows Terraform to delete a bucket even if it still contains objects. Use with caution (recommended false in prod)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_versioning" {
