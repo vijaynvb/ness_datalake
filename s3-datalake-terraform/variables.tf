@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region to deploy the data lake buckets into."
   type        = string
-  default     = "ap-southeast-2"
+  default     = "us-east-1"
 }
 
 variable "project_name" {
@@ -16,12 +16,13 @@ variable "environment" {
   default     = "dev"
 }
 
-variable "layer_bucket_names" {
+variable "layer_bucket_name_prefixes" {
   description = <<-EOT
-    Map of medallion layer -> S3 bucket name prefix. The current AWS account
-    ID is automatically appended to each value (via data.aws_caller_identity)
-    to keep bucket names globally unique.
-    Example: { silver = "deb-01-silver-layer-lab", gold = "deb-01-gold-layer-lab" }
+    Map of medallion layer -> S3 bucket name prefix (without the account ID).
+    Each key becomes an independent bucket (no shared prefixes). The current
+    AWS account ID is appended automatically at apply time (via
+    data.aws_caller_identity) so the resulting bucket name is globally unique,
+    e.g. prefix "deb-01-silver-layer-lab" -> "deb-01-silver-layer-lab-123456789012".
   EOT
   type        = map(string)
   default = {
@@ -78,18 +79,54 @@ variable "layer_partition_prefixes" {
     "/") to pre-create as zero-byte "folder marker" objects in that layer's
     bucket. Every intermediate level of each path is also created, so a
     single deep path creates the full folder chain down to it.
-    Example:
-      silver = ["transport/bookings/year=2024/month=12/day=02/hour=00/"]
-      gold   = ["datawarehouse/fact_bookings/year=2024/month=12/day=02/"]
+    Default mirrors the folder structure from sparkLab/Docs/04_Datapipeline.md:
+      silver = ["transport/bookings/year=2024/month=06/",
+                "exchange-rates-monthly/year=2024/month=06/"]
+      gold   = ["datawarehouse/staging_fact_bookings/year=2026/month=06/",
+                "prod_artifacts/"]
   EOT
   type        = map(list(string))
   default = {
     silver = [
-      "transport/bookings/year=2024/month=12/day=02/hour=00/",
+      "transport/bookings/year=2024/month=06/",
+      "exchange-rates-monthly/year=2024/month=06/",
     ]
     gold = [
-      "datawarehouse/fact_bookings/year=2024/month=12/day=02/",
+      "datawarehouse/staging_fact_bookings/year=2026/month=06/",
+      "prod_artifacts/",
     ]
+  }
+}
+
+variable "source_files" {
+  description = <<-EOT
+    Map of upload key -> source file upload config. Each entry uploads a
+    local file (from the "source/" directory by default) into the given
+    layer bucket at the given key. Used to push the actual lab datasets
+    (taxi trips, exchange rates) and the PySpark pipeline script into S3,
+    matching the paths described in sparkLab/Docs/04_Datapipeline.md.
+  EOT
+  type = map(object({
+    layer       = string
+    key         = string
+    source_path = string
+  }))
+  default = {
+    taxi_trips = {
+      layer       = "silver"
+      key         = "transport/bookings/year=2024/month=06/green_tripdata_2024-06.parquet"
+      source_path = "source/green_tripdata_2024-06.parquet"
+    }
+    exchange_rates = {
+      layer       = "silver"
+      key         = "exchange-rates-monthly/year=2024/month=06/exchange_rates_2024_06.parquet"
+      source_path = "source/exchange_rates_2024_06.parquet"
+    }
+    pipeline_script = {
+      layer       = "gold"
+      key         = "prod_artifacts/03-data-pipeline.py"
+      source_path = "source/03-data-pipeline.py"
+    }
   }
 }
 

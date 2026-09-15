@@ -5,12 +5,12 @@ Provisions independent S3 buckets for a **medallion-architecture data lake**
 Partitioning session — but as **separate buckets per layer** rather than
 prefixes within one bucket:
 
-```bash
+```text
 s3://deb-01-silver-layer-lab/            # raw data, minimal transformation
-└── transport/bookings/year=2024/month=12/day=02/hour=00/bookings.parquet
+└── transport/bookings/year=2024/month=06/day=02/hour=00/bookings.parquet
 
 s3://deb-01-gold-layer-lab/              # curated, business-ready data
-└── datawarehouse/fact_bookings/year=2024/month=12/day=02/data.parquet
+└── datawarehouse/fact_bookings/year=2024/month=06/day=02/data.parquet
 ```
 
 Partition keys (`year=`, `month=`, `day=`, `hour=`) are just object key
@@ -40,6 +40,10 @@ For each entry in `layer_bucket_names` (default: `silver`, `gold`):
 
 Plus, optionally, one shared access-logging bucket for all layer buckets.
 
+Plus, the actual files from [source/](source/) (`source_files` variable) —
+the taxi-trips and exchange-rates Parquet datasets, and the PySpark pipeline
+script — uploaded to their lab-specified S3 locations.
+
 Additionally, `layer_partition_prefixes` pre-creates zero-byte "folder
 marker" objects for every intermediate level of the given partition
 paths, so the full folder chain is visible immediately in the console —
@@ -49,99 +53,47 @@ by default:
 silver/transport/
 silver/transport/bookings/
 silver/transport/bookings/year=2024/
-silver/transport/bookings/year=2024/month=12/
-silver/transport/bookings/year=2024/month=12/day=02/
-silver/transport/bookings/year=2024/month=12/day=02/hour=00/
+silver/transport/bookings/year=2024/month=06/
+silver/transport/bookings/year=2024/month=06/day=02/
+silver/transport/bookings/year=2024/month=06/day=02/hour=00/
 
 gold/datawarehouse/
 gold/datawarehouse/fact_bookings/
 gold/datawarehouse/fact_bookings/year=2024/
-gold/datawarehouse/fact_bookings/year=2024/month=12/
-gold/datawarehouse/fact_bookings/year=2024/month=12/day=02/
+gold/datawarehouse/fact_bookings/year=2024/month=06/
+gold/datawarehouse/fact_bookings/year=2024/month=06/day=02/
 ```
 
 (The `silver/` / `gold/` shown above is the bucket itself — each layer is
 its own bucket, so these are keys *within* that bucket.) These are cosmetic
-markers only; your actual `bookings.parquet` / `data.parquet` files are
-written by your ingestion/transformation pipeline, not by Terraform.
+markers only.
 
-## Execution steps
+Additionally, `source_files` uploads the actual lab artifacts from the
+[source/](source/) directory into the right bucket/key, matching the paths
+from [sparkLab/Docs/04_Datapipeline.md](../sparkLab/Docs/04_Datapipeline.md):
 
-### 1. Prerequisites
+```text
+silver/transport/bookings/year=2024/month=06/green_tripdata_2024-06.parquet
+silver/exchange-rates-monthly/year=2024/month=06/exchange_rates_2024_06.parquet
+gold/prod_artifacts/03-data-pipeline.py
+```
 
-- [Terraform](https://developer.hashicorp.com/terraform/install) `>= 1.5.0`
-- AWS credentials with permission to manage S3 buckets, available via one of:
-  - `aws configure` (uses `~/.aws/credentials`)
-  - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (/ `AWS_SESSION_TOKEN`) env vars
-  - An assumed role / SSO profile (`AWS_PROFILE=<profile>`)
-- Verify credentials resolve before running Terraform:
+Terraform tracks each file's MD5 (`etag`), so re-running `apply` after
+replacing a file in `source/` re-uploads it automatically. To add another
+file, add an entry to `source_files` in your `terraform.tfvars` — see
+[variables.tf](variables.tf).
 
-  ```bash
-  aws sts get-caller-identity
-  ```
-
-### 2. Configure variables
+## Usage
 
 ```bash
 cd terraform-s3-datalake
 cp terraform.tfvars.example terraform.tfvars
-```
+# edit terraform.tfvars as needed (bucket names must be globally unique)
 
-Edit `terraform.tfvars`:
-
-- Set `aws_region`, `project_name`, `environment`.
-- Change `layer_bucket_names` to bucket names that are **globally unique
-  across all of AWS** (e.g. suffix with your account ID, as in the example
-  file).
-- Adjust `layer_partition_prefixes`, lifecycle days, `kms_key_arn`, etc. as
-  needed — see [Key variables](#key-variables) below.
-
-### 3. Initialize
-
-Downloads the AWS provider and sets up the local backend:
-
-```bash
 terraform init
-```
-
-### 4. Review the plan
-
-```bash
 terraform plan
-```
-
-Confirm it shows only the resources you expect to create (buckets,
-versioning, encryption, public access block, lifecycle rules, and — if
-`enable_access_logging = true` — the shared logging bucket).
-
-### 5. Apply
-
-```bash
 terraform apply
 ```
-
-Type `yes` when prompted. On success, Terraform prints the
-[outputs](#outputs) (bucket names, ARNs, layer URIs).
-
-### 6. Verify
-
-```bash
-terraform output
-aws s3 ls | grep <project_name>
-```
-
-Check the console or `aws s3api list-objects-v2 --bucket <bucket-name>` to
-confirm the zero-byte partition folder markers were created.
-
-### 7. Tear down (optional)
-
-```bash
-terraform destroy
-```
-
-Buckets with `force_destroy = false` (the default) will fail to delete if
-they still contain objects — empty them first (`aws s3 rm s3://<bucket> --recursive`)
-or set `force_destroy = true` before destroying.
 
 ## Key variables
 
@@ -149,6 +101,7 @@ or set `force_destroy = true` before destroying.
 |---|---|---|
 | `layer_bucket_names` | `{ silver = "deb-01-silver-layer-lab", gold = "deb-01-gold-layer-lab" }` | Map of layer key → bucket name; one bucket per entry |
 | `layer_partition_prefixes` | see [variables.tf](variables.tf) | Map of layer key → list of full partition paths to pre-create as folder markers (every intermediate level included) |
+| `source_files` | see [variables.tf](variables.tf) | Map of upload key → `{ layer, key, source_path }` for actual files to upload from `source/` into a layer bucket |
 | `enable_versioning` | `true` | Bucket versioning |
 | `kms_key_arn` | `""` | Set to use SSE-KMS instead of SSE-S3 |
 | `silver_lifecycle_days_to_ia` / `_glacier` | `30` / `90` | Silver bucket storage tiering |
@@ -191,7 +144,7 @@ for it too.
 - **Prefixes vs. folders**: within each bucket, S3 has no real directories.
   `transport/bookings/...` is just a prefix within the object key.
 - **Partitioning pattern**: your pipelines should write objects like
-  `transport/bookings/year=2024/month=12/day=02/hour=00/bookings.parquet`
+  `transport/bookings/year=2024/month=06/day=02/hour=00/bookings.parquet`
   inside the silver bucket. This Hive-style `key=value` partitioning is what
   lets Athena/Glue/Spark prune partitions and scan less data.
 - Bucket names must be **globally unique across all of AWS** — if

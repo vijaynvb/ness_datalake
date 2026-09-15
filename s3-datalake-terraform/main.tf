@@ -8,11 +8,12 @@ locals {
     var.tags
   )
 
-  # Append the current AWS account ID to each configured bucket name prefix
-  # so bucket names stay globally unique per account without hardcoding it.
+  # Globally unique bucket name per layer: "<prefix>-<account_id>".
+  # The AWS account ID is fetched dynamically so bucket names never collide
+  # across accounts without having to hardcode an ID in tfvars.
   layer_bucket_names = {
-    for layer, name in var.layer_bucket_names :
-    layer => "${name}-${data.aws_caller_identity.current.account_id}"
+    for layer, prefix in var.layer_bucket_name_prefixes :
+    layer => "${prefix}-${data.aws_caller_identity.current.account_id}"
   }
 
   # Expand each configured partition path into every intermediate prefix,
@@ -100,9 +101,9 @@ resource "aws_s3_bucket_ownership_controls" "layer" {
 # Zero-byte "folder marker" objects for the configured partition paths, plus
 # every intermediate level, so the full folder chain is visible immediately
 # in the console. S3 has no real folders — these are cosmetic prefix markers.
-#   silver: transport/, transport/bookings/, .../year=2024/, .../month=12/,
+#   silver: transport/, transport/bookings/, .../year=2024/, .../month=06/,
 #           .../day=02/, .../hour=00/
-#   gold:   datawarehouse/, .../fact_bookings/, .../year=2024/, .../month=12/,
+#   gold:   datawarehouse/, .../fact_bookings/, .../year=2024/, .../month=06/,
 #           .../day=02/
 # ---------------------------------------------------------------------------
 resource "aws_s3_object" "partition_markers" {
@@ -112,6 +113,22 @@ resource "aws_s3_object" "partition_markers" {
   key          = each.value.key
   content_type = "application/x-directory"
   content      = "" # zero-byte marker object; content is irrelevant
+
+  depends_on = [aws_s3_bucket_ownership_controls.layer]
+}
+
+# ---------------------------------------------------------------------------
+# Actual source file uploads (lab datasets + pipeline script) driven by
+# var.source_files. content-md5/etag ensures Terraform re-uploads whenever
+# the local file content changes.
+# ---------------------------------------------------------------------------
+resource "aws_s3_object" "source_files" {
+  for_each = var.source_files
+
+  bucket = aws_s3_bucket.layer[each.value.layer].id
+  key    = each.value.key
+  source = "${path.module}/${each.value.source_path}"
+  etag   = filemd5("${path.module}/${each.value.source_path}")
 
   depends_on = [aws_s3_bucket_ownership_controls.layer]
 }
