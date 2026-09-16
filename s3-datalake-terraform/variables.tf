@@ -82,7 +82,7 @@ variable "layer_partition_prefixes" {
     Default mirrors the folder structure from sparkLab/Docs/04_Datapipeline.md:
       silver = ["transport/bookings/year=2024/month=06/",
                 "exchange-rates-monthly/year=2024/month=06/"]
-      gold   = ["datawarehouse/staging_fact_bookings/year=2026/month=06/",
+      gold   = ["datawarehouse/staging_fact_bookings/year=2024/month=06/",
                 "prod_artifacts/"]
   EOT
   type        = map(list(string))
@@ -92,7 +92,7 @@ variable "layer_partition_prefixes" {
       "exchange-rates-monthly/year=2024/month=06/",
     ]
     gold = [
-      "datawarehouse/staging_fact_bookings/year=2026/month=06/",
+      "datawarehouse/staging_fact_bookings/year=2024/month=06/",
       "prod_artifacts/",
     ]
   }
