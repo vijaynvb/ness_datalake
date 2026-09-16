@@ -13,13 +13,25 @@ from pyspark.sql.types import (StructType, StructField, TimestampType, IntegerTy
 
 logger = logging.getLogger(__name__)
 
-# Constants
-C_AWS_ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
-C_RAW_BOOKINGS_S3_PATH = f"s3://deb-01-silver-layer-lab-{C_AWS_ACCOUNT_ID}/transport/bookings/"
-C_EXCHANGE_RATE_S3_PATH = f"s3://deb-01-silver-layer-lab-{C_AWS_ACCOUNT_ID}/exchange-rates-monthly/"
-C_FACT_BOOKINGS_S3_PATH = f"s3://deb-01-gold-layer-lab-{C_AWS_ACCOUNT_ID}/datawarehouse/fact_bookings/"
-C_FACT_BOOKINGS_STAGING_S3_PATH = f"s3://deb-01-gold-layer-lab-{C_AWS_ACCOUNT_ID}/datawarehouse/staging_fact_bookings/"
-C_GOLD_LAYER_S3_BUCKET = f"s3://deb-01-gold-layer-lab-{C_AWS_ACCOUNT_ID}/"
+# Constants (populated in main() once boto3/STS is reachable)
+C_AWS_ACCOUNT_ID = None
+C_RAW_BOOKINGS_S3_PATH = None
+C_EXCHANGE_RATE_S3_PATH = None
+C_FACT_BOOKINGS_S3_PATH = None
+C_FACT_BOOKINGS_STAGING_S3_PATH = None
+C_GOLD_LAYER_S3_BUCKET = None
+
+
+def init_s3_paths():
+    global C_AWS_ACCOUNT_ID, C_RAW_BOOKINGS_S3_PATH, C_EXCHANGE_RATE_S3_PATH
+    global C_FACT_BOOKINGS_S3_PATH, C_FACT_BOOKINGS_STAGING_S3_PATH, C_GOLD_LAYER_S3_BUCKET
+
+    C_AWS_ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
+    C_RAW_BOOKINGS_S3_PATH = f"s3://deb-01-silver-layer-lab-{C_AWS_ACCOUNT_ID}/transport/bookings/"
+    C_EXCHANGE_RATE_S3_PATH = f"s3://deb-01-silver-layer-lab-{C_AWS_ACCOUNT_ID}/exchange-rates-monthly/"
+    C_FACT_BOOKINGS_S3_PATH = f"s3://deb-01-gold-layer-lab-{C_AWS_ACCOUNT_ID}/datawarehouse/fact_bookings/"
+    C_FACT_BOOKINGS_STAGING_S3_PATH = f"s3://deb-01-gold-layer-lab-{C_AWS_ACCOUNT_ID}/datawarehouse/staging_fact_bookings/"
+    C_GOLD_LAYER_S3_BUCKET = f"s3://deb-01-gold-layer-lab-{C_AWS_ACCOUNT_ID}/"
 
 
 # Define UDF to calculate trip efficiency
@@ -302,39 +314,45 @@ def transform(spark: SparkSession, date_str: str) -> DataFrame:
 
     curated_bookings_df = spark.sql("""
                 SELECT
-                    cast(VendorID as string) AS platform_key,
+                    hvfhs_license_num AS platform_key,
                     'USD' AS source_currency,
-                    cast(lpep_pickup_datetime as timestamp) AS request_datetime,
-                    date_format(lpep_pickup_datetime, 'yyyy-MM-dd') AS booking_date_str,
-                    date_format(lpep_pickup_datetime, 'yyyy') AS year,
-                    date_format(lpep_pickup_datetime, 'MM') AS month,
-                    date_format(lpep_pickup_datetime, 'dd') AS day,
-                    cast(lpep_pickup_datetime as timestamp) AS pickup_datetime,
-                    cast(lpep_dropoff_datetime as timestamp) AS dropoff_datetime,
-                    cast(date_format(lpep_pickup_datetime, 'yyyyMMdd') as int) AS booking_date_key,
-                    cast(date_format(lpep_pickup_datetime, 'yyyyMMdd') as int) AS pu_date_key,
-                    cast(date_format(lpep_pickup_datetime, 'yyyyMMddHH') as int) AS pu_hour_key,
-                    cast(date_format(lpep_dropoff_datetime, 'yyyyMMdd') as int) AS do_date_key,
-                    cast(date_format(lpep_dropoff_datetime, 'yyyyMMddHH') as int) AS do_hour_key,
+                    request_datetime,
+                    date_format(request_datetime, 'yyyy-MM-dd') AS booking_date_str,
+                    date_format(request_datetime, 'yyyy') AS year,
+                    date_format(request_datetime, 'MM') AS month,
+                    date_format(request_datetime, 'dd') AS day,
+                    pickup_datetime,
+                    dropoff_datetime,
+                    cast(date_format(request_datetime, 'yyyyMMdd') as int) AS booking_date_key,
+                    cast(date_format(pickup_datetime, 'yyyyMMdd') as int) AS pu_date_key,
+                    cast(date_format(pickup_datetime, 'yyyyMMddHH') as int) AS pu_hour_key,
+                    cast(date_format(dropoff_datetime, 'yyyyMMdd') as int) AS do_date_key,
+                    cast(date_format(dropoff_datetime, 'yyyyMMddHH') as int) AS do_hour_key,
                     cast(PULocationID as int) AS pu_location_key,
                     cast(DOLocationID as int) AS do_location_key,
-                    cast(trip_distance as double) AS trip_miles,
-                    cast(unix_timestamp(lpep_dropoff_datetime) - unix_timestamp(lpep_pickup_datetime) as double) AS trip_time,
-                    (unix_timestamp(lpep_dropoff_datetime) - unix_timestamp(lpep_pickup_datetime)) / 60.0 AS trip_mins,
-                    cast(trip_distance / ((unix_timestamp(lpep_dropoff_datetime) - unix_timestamp(lpep_pickup_datetime)) / 3600.0) as double) AS speed_mile_per_hour,
-                    cast(fare_amount as double) AS base_passenger_fare,
-                    cast(tolls_amount as double) AS tolls,
-                    cast(0.0 as double) AS bcf,
-                    cast(mta_tax as double) AS sales_tax,
-                    cast(congestion_surcharge as double) AS congestion_surcharge,
-                    cast(0.0 as double) AS airport_fee,
-                    cast(tip_amount as double) AS tips,
-                    cast(total_amount as double) AS total_fare,
-                    cast(NULL as double) AS driver_pay,
-                    cast(false as boolean) AS shared_request_flag,
-                    cast(false as boolean) AS shared_match_flag,
-                    cast(false as boolean) AS wav_request_flag,
-                    cast(false as boolean) AS wav_match_flag
+                    trip_miles,
+                    trip_time,
+                    trip_time / 60 AS trip_mins,
+                    trip_miles / (trip_time / 3600) AS speed_mile_per_hour,
+                    base_passenger_fare,
+                    tolls,
+                    bcf,
+                    sales_tax,
+                    congestion_surcharge,
+                    airport_fee,
+                    tips,
+                    base_passenger_fare +
+                        tolls +
+                        bcf +
+                        sales_tax +
+                        congestion_surcharge +
+                        airport_fee +
+                        tips AS total_fare,
+                    driver_pay,
+                    cast(shared_request_flag as boolean) as shared_request_flag,
+                    cast(shared_match_flag as boolean) as shared_match_flag,
+                    cast(wav_request_flag as boolean) as wav_request_flag,
+                    cast(wav_match_flag as boolean) as wav_match_flag
                 FROM raw_bookings_view
             """)
     # Add UDF column for trip efficiency
@@ -430,10 +448,13 @@ def main(date_str: str):
     logger.info(f"Starting FACT BOOKINGS ETL process for date {date_str}.")
     spark = None
     try:
-        # .config("spark.driver.memory", "10g") \
-        # .config("spark.executor.memory", "10g") \
+        init_s3_paths()
+
         spark = SparkSession.builder \
             .appName("FACT BOOKINGS ETL") \
+            .config("spark.driver.memory", "4g") \
+            .config("spark.driver.memoryOverhead", "1g") \
+            .config("spark.executor.memory", "4g") \
             .getOrCreate()
 
         # Extract
